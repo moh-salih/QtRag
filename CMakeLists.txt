@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 project(QtRag VERSION 1.0.0 LANGUAGES CXX)
 
 find_package(Qt6 REQUIRED COMPONENTS Core)
-find_package(hnswlib REQUIRED)   # or add_subdirectory if vendored
+find_package(hnswlib REQUIRED)   
 
 add_library(QtRag STATIC
     src/RagEngine.cpp
@@ -22,7 +22,7 @@ target_include_directories(QtRag PUBLIC
     $<INSTALL_INTERFACE:include>
 )
 
-target_link_libraries(QtRag PUBLIC Qt6::Core hnswlib)
+target_link_libraries(QtRag PUBLIC Qt6::Core hnswlib::hnswlib)
 set_target_properties(QtRag PROPERTIES AUTOMOC ON CXX_STANDARD 23)
 
 # --- Install (same pattern as QtLlama) ---
