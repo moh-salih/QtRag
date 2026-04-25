@@ -2,12 +2,13 @@
 #include <QtGlobal>
 
 namespace QtRag {
-
 struct ChunkingConfig {
-    int     minChunkLength  = 40;
-    int     maxChunkLength  = 400;
-    int     overlapTokens   = 20;
+    int     minChunkLength   = 40;
+    int     maxChunkLength   = 400;
+    int     overlapTokens    = 20;
     bool    filterLowQuality = true;
+    float   lengthBoostFactor = 1.0f;  
+    float   fillerWordLimit   = 0.6f;
 };
 
 struct IndexConfig {
