@@ -2,10 +2,12 @@
 #include "QtRag/IRagEmbedder.h"
 #include "QtRag/IRagStorage.h"
 #include "QtRag/RagTextChunker.h"
+#include "QtRag/RagConfig.h"
 
 #include <QMutexLocker>
 #include <QReadLocker>
 #include <QWriteLocker>
+#include <QDebug>
 #include <algorithm>
 
 namespace QtRag {
@@ -18,6 +20,8 @@ RagEngine::RagEngine(IRagEmbedder* embedder, IRagStorage* storage,
     , mConfig(config)
 {
     connect(mEmbedder, &IRagEmbedder::embeddingReady, this, &RagEngine::onEmbeddingReady);
+    // IRagEmbedder::errorOccurred still emits a QString from the adapter layer
+    // in LiveTextify — we map it here to our typed enum.
     connect(mEmbedder, &IRagEmbedder::errorOccurred,  this, &RagEngine::onEmbeddingError);
 }
 
@@ -35,9 +39,8 @@ void RagEngine::indexText(const QString& text, int sessionId) {
 
     {
         QMutexLocker locker(&mQueueMutex);
-        for (const QString& chunk : chunks) {
+        for (const QString& chunk : chunks)
             mTaskQueue.push({ chunk, sessionId, getNextChunkIndex(sessionId) });
-        }
     }
     processNextInQueue();
 }
@@ -56,7 +59,6 @@ void RagEngine::rebuildIndex(int sessionId) {
     const auto& idx = mConfig.index;
     auto* space = new hnswlib::L2Space(static_cast<size_t>(idx.dim));
     size_t maxElements = std::max(idx.initialCapacity, static_cast<size_t>(chunks.size()) * 2);
-
     auto* index = new hnswlib::HierarchicalNSW<float>(space, maxElements, idx.M, idx.efConstruction);
 
     for (int i = 0; i < chunks.size(); ++i) {
@@ -93,8 +95,12 @@ void RagEngine::onEmbeddingReady(const std::vector<float>& embedding, const QStr
     }
 
     if (chunkIndex >= 0) {
-        // Indexing path
         bool saved = mStorage->saveChunk(task.sessionId, text, chunkIndex, embedding);
+        if (!saved) {
+            qCritical() << "QtRag:" << errorToString(Error::StorageFailed);
+            emit errorOccurred(Error::StorageFailed);
+        }
+
         const auto& idx = mConfig.index;
         if (saved && embedding.size() == static_cast<size_t>(idx.dim)) {
             QWriteLocker locker(&mIndexLock);
@@ -105,7 +111,6 @@ void RagEngine::onEmbeddingReady(const std::vector<float>& embedding, const QStr
             }
         }
     } else {
-        // Search path
         QString context = performHnswSearch(embedding, task.sessionId);
         emit contextReady(context, task.sessionId);
     }
@@ -113,9 +118,12 @@ void RagEngine::onEmbeddingReady(const std::vector<float>& embedding, const QStr
     processNextInQueue();
 }
 
-void RagEngine::onEmbeddingError(const QString& error) {
-    emit errorOccurred(error);
-    handleTaskFailure();
+void RagEngine::onEmbeddingError(const QString& /*error*/) {
+    // The adapter (AppRagEmbedder in LiveTextify) still forwards a QString
+    // from IRagEmbedder. We discard the string here and emit the typed enum.
+    qCritical() << "QtRag:" << errorToString(Error::EmbeddingFailed);
+    emit errorOccurred(Error::EmbeddingFailed);
+    handleTaskFailure(Error::EmbeddingFailed);
 }
 
 // ── Private ───────────────────────────────────────────────────────────────────
@@ -129,7 +137,7 @@ void RagEngine::processNextInQueue() {
     mEmbedder->generateEmbedding(task.text, task.chunkIndex);
 }
 
-void RagEngine::handleTaskFailure() {
+void RagEngine::handleTaskFailure(QtRag::Error error) {
     EmbeddingTask task;
     bool hasTask = false;
     {
@@ -141,6 +149,7 @@ void RagEngine::handleTaskFailure() {
         }
         mIsProcessing = false;
     }
+    Q_UNUSED(error)
     if (hasTask && task.chunkIndex < 0)
         emit contextReady("", task.sessionId);
 
@@ -175,12 +184,13 @@ QString RagEngine::performHnswSearch(const std::vector<float>& queryVec, int ses
         }
         return context.trimmed();
     } catch (...) {
+        qCritical() << "QtRag:" << errorToString(Error::IndexSearchFailed);
+        emit errorOccurred(Error::IndexSearchFailed);
         return "";
     }
 }
 
 int RagEngine::getNextChunkIndex(int sessionId) {
-    // Must be called under mQueueMutex
     if (!mCounters.contains(sessionId))
         mCounters[sessionId] = mStorage->getChunkCount(sessionId);
     return mCounters[sessionId]++;

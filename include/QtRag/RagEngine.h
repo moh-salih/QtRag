@@ -33,7 +33,7 @@ public:
 
 signals:
     void contextReady(const QString& context, int sessionId);
-    void errorOccurred(const QString& error);
+    void errorOccurred(QtRag::Error error);
 
 private slots:
     void onEmbeddingReady(const std::vector<float>& embedding, const QString& text, int chunkIndex);
@@ -43,26 +43,23 @@ private:
     struct EmbeddingTask {
         QString text;
         int     sessionId;
-        int     chunkIndex; // -1 = search query, >= 0 = index
+        int     chunkIndex;
     };
 
     void    processNextInQueue();
-    void    handleTaskFailure();
+    void    handleTaskFailure(QtRag::Error error);
     QString performHnswSearch(const std::vector<float>& queryVec, int sessionId);
     int     getNextChunkIndex(int sessionId);
 
-    // Dependencies
     IRagEmbedder*  mEmbedder;
     IRagStorage*   mStorage;
     RagConfig      mConfig;
 
-    // HNSW (protected by mIndexLock)
     hnswlib::HierarchicalNSW<float>* mHnswIndex = nullptr;
     hnswlib::L2Space*                mSpace      = nullptr;
     QVector<RagChunk>                mLoadedChunks;
     QReadWriteLock                   mIndexLock;
 
-    // Queue state (protected by mQueueMutex)
     std::queue<EmbeddingTask> mTaskQueue;
     QHash<int, int>           mCounters;
     bool                      mIsProcessing = false;
