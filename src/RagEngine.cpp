@@ -118,12 +118,10 @@ void RagEngine::onEmbeddingReady(const std::vector<float>& embedding, const QStr
     processNextInQueue();
 }
 
-void RagEngine::onEmbeddingError(const QString& /*error*/) {
-    // The adapter (AppRagEmbedder in LiveTextify) still forwards a QString
-    // from IRagEmbedder. We discard the string here and emit the typed enum.
-    qCritical() << "QtRag:" << errorToString(Error::EmbeddingFailed);
-    emit errorOccurred(Error::EmbeddingFailed);
-    handleTaskFailure(Error::EmbeddingFailed);
+void RagEngine::onEmbeddingError(QtRag::Error error) {
+    qCritical() << "QtRag:" << errorToString(error);
+    emit errorOccurred(error);
+    handleTaskFailure(error);
 }
 
 // ── Private ───────────────────────────────────────────────────────────────────
