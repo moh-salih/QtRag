@@ -37,7 +37,7 @@ signals:
 
 private slots:
     void onEmbeddingReady(const std::vector<float>& embedding, const QString& text, int chunkIndex);
-    void onEmbeddingError(const QtRag::Error& error);
+    void onEmbeddingError(QtRag::Error error);
 
 private:
     struct EmbeddingTask {
