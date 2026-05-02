@@ -83,19 +83,18 @@ void RagEngine::resetSession(int sessionId) {
 }
 
 // ── Private slots ─────────────────────────────────────────────────────────────
-
 void RagEngine::onEmbeddingReady(const std::vector<float>& embedding, const QString& text, int chunkIndex) {
-    EmbeddingTask task;
+    int sessionId;
     {
         QMutexLocker locker(&mQueueMutex);
         if (mTaskQueue.empty()) { mIsProcessing = false; return; }
-        task = mTaskQueue.front();
+        sessionId = mTaskQueue.front().sessionId;  // only need sessionId from queue
         mTaskQueue.pop();
         mIsProcessing = false;
     }
 
     if (chunkIndex >= 0) {
-        bool saved = mStorage->saveChunk(task.sessionId, text, chunkIndex, embedding);
+        bool saved = mStorage->saveChunk(sessionId, text, chunkIndex, embedding);
         if (!saved) {
             qCritical() << "QtRag:" << errorToString(Error::StorageFailed);
             emit errorOccurred(Error::StorageFailed);
@@ -105,14 +104,14 @@ void RagEngine::onEmbeddingReady(const std::vector<float>& embedding, const QStr
         if (saved && embedding.size() == static_cast<size_t>(idx.dim)) {
             QWriteLocker locker(&mIndexLock);
             if (mHnswIndex) {
-                RagChunk chunk{ -1, task.sessionId, chunkIndex, text, embedding };
+                RagChunk chunk{ -1, sessionId, chunkIndex, text, embedding };
                 mLoadedChunks.append(chunk);
                 mHnswIndex->addPoint(embedding.data(), mLoadedChunks.size() - 1);
             }
         }
     } else {
-        QString context = performHnswSearch(embedding, task.sessionId);
-        emit contextReady(context, task.sessionId);
+        QString context = performHnswSearch(embedding, sessionId);
+        emit contextReady(context, sessionId);
     }
 
     processNextInQueue();
@@ -155,37 +154,44 @@ void RagEngine::handleTaskFailure(QtRag::Error error) {
 }
 
 QString RagEngine::performHnswSearch(const std::vector<float>& queryVec, int sessionId) {
-    QReadLocker locker(&mIndexLock);
-    const auto& search = mConfig.search;
-    const auto& idx    = mConfig.index;
+    bool searchFailed = false;
+    QString context;
+    {
+        QReadLocker locker(&mIndexLock);
+        const auto& search = mConfig.search;
+        const auto& idx    = mConfig.index;
 
-    if (!mHnswIndex || queryVec.size() != static_cast<size_t>(idx.dim) || mLoadedChunks.isEmpty())
-        return "";
+        if (!mHnswIndex || queryVec.size() != static_cast<size_t>(idx.dim) || mLoadedChunks.isEmpty())
+            return "";
 
-    try {
-        auto result = mHnswIndex->searchKnn(queryVec.data(), search.topK);
+        try {
+            auto result = mHnswIndex->searchKnn(queryVec.data(), search.topK);
 
-        struct Hit { float dist; size_t id; };
-        std::vector<Hit> hits;
-        hits.reserve(result.size());
-        while (!result.empty()) {
-            hits.push_back({ result.top().first, result.top().second });
-            result.pop();
+            struct Hit { float dist; size_t id; };
+            std::vector<Hit> hits;
+            hits.reserve(result.size());
+            while (!result.empty()) {
+                hits.push_back({ result.top().first, result.top().second });
+                result.pop();
+            }
+            std::reverse(hits.begin(), hits.end());
+
+            for (const auto& hit : hits) {
+                if (search.minSimilarity > 0.0f && hit.dist > search.minSimilarity) continue;
+                if (hit.id < static_cast<size_t>(mLoadedChunks.size()))
+                    context += "- " + mLoadedChunks[hit.id].text + "\n";
+            }
+        } catch (...) {
+            searchFailed = true;
         }
-        std::reverse(hits.begin(), hits.end());
+    } // lock released here
 
-        QString context;
-        for (const auto& hit : hits) {
-            if (search.minSimilarity > 0.0f && hit.dist > search.minSimilarity) continue;
-            if (hit.id < static_cast<size_t>(mLoadedChunks.size()))
-                context += "- " + mLoadedChunks[hit.id].text + "\n";
-        }
-        return context.trimmed();
-    } catch (...) {
+    if (searchFailed) {
         qCritical() << "QtRag:" << errorToString(Error::IndexSearchFailed);
         emit errorOccurred(Error::IndexSearchFailed);
         return "";
     }
+    return context.trimmed();
 }
 
 int RagEngine::getNextChunkIndex(int sessionId) {
